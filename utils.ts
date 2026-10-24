@@ -42,7 +42,7 @@ export const generateFilebaseRequestOptions = (
   }
 
   const now = new Date()
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '') + 'Z'
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '')
   const dateStamp = amzDate.slice(0, 8)
 
   // Payload hash (empty string for PUT with no body)
@@ -176,8 +176,16 @@ export const createBucket = async (
   }
   requestOptions = generateFilebaseRequestOptions(token, requestOptions)
 
-  return await fetch(`https://${requestOptions.host}/`, requestOptions as unknown as RequestInit)
-    .then((res) => res.status == 200)
+  const res = await fetch(`https://${requestOptions.host}/`, requestOptions as unknown as RequestInit)
+  if (res.ok) return
+  // Throw instead of failing silently: a missing bucket otherwise only shows
+  // up later as a confusing NoSuchBucket on upload.
+  const body = await res.text()
+  const code = body.match(/<Code>(.*?)<\/Code>/)?.[1]
+  // S3 outside us-east-1 answers 409 for an existing own bucket.
+  if (code === 'BucketAlreadyOwnedByYou') return
+  const message = body.match(/<Message>(.*?)<\/Message>/)?.[1]
+  throw new Error(`Failed to create bucket "${bucketName}": ${code ?? res.status} ${message ?? res.statusText}`)
 }
 
 const sign = (key: Uint8Array | string, msg: string): Uint8Array =>

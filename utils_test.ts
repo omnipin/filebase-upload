@@ -1,6 +1,13 @@
 import { describe, it } from '@std/testing/bdd'
-import { assertEquals, assertThrows } from '@std/assert'
-import { fromEnv, generateFilebaseRequestOptions, parseUrl, presignRequest, type RequestOptions } from './utils.ts'
+import { assertEquals, assertMatch, assertRejects, assertThrows } from '@std/assert'
+import {
+  createBucket,
+  fromEnv,
+  generateFilebaseRequestOptions,
+  parseUrl,
+  presignRequest,
+  type RequestOptions,
+} from './utils.ts'
 import type { HttpRequest } from '@smithy/types'
 import { assertObjectMatch } from '@std/assert/object-match'
 
@@ -74,5 +81,50 @@ describe('generateFilebaseRequestOptions', () => {
 describe('fromEnv', () => {
   it('should throw if no token is provided', () => {
     assertThrows(() => fromEnv('lol')())
+  })
+})
+
+describe('createBucket', () => {
+  const token = btoa('key:secret')
+  const stubFetch = (status: number, body = '') => {
+    const calls: RequestInit[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = ((_url: string, init: RequestInit) => {
+      calls.push(init)
+      return Promise.resolve(new Response(body, { status }))
+    }) as typeof fetch
+    return { calls, restore: () => (globalThis.fetch = original) }
+  }
+
+  it('should sign with a valid x-amz-date', async () => {
+    const { calls, restore } = stubFetch(200)
+    try {
+      await createBucket({ bucketName: 'b', token })
+      const date = (calls[0].headers as Record<string, string>)['X-Amz-Date']
+      assertMatch(date, /^\d{8}T\d{6}Z$/)
+    } finally {
+      restore()
+    }
+  })
+
+  it('should throw the S3 error when creation fails', async () => {
+    const { restore } = stubFetch(
+      409,
+      '<Error><Code>BucketAlreadyExists</Code><Message>The requested bucket name is not available.</Message></Error>',
+    )
+    try {
+      await assertRejects(() => createBucket({ bucketName: 'b', token }), Error, 'BucketAlreadyExists')
+    } finally {
+      restore()
+    }
+  })
+
+  it('should accept a bucket the caller already owns', async () => {
+    const { restore } = stubFetch(409, '<Error><Code>BucketAlreadyOwnedByYou</Code></Error>')
+    try {
+      await createBucket({ bucketName: 'b', token })
+    } finally {
+      restore()
+    }
   })
 })
